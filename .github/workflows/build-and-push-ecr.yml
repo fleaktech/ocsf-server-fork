@@ -1,0 +1,139 @@
+name: Build and Push to ECR
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      push_to_ecr:
+        description: 'Push to ECR (yes/no)'
+        required: false
+        default: 'yes'
+
+env:
+  ECR_REGISTRY: 679890967376.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: fleak/ocsf-server
+  AWS_REGION: us-east-1
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build Docker image and push to ECR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout ocsf-server repository
+        uses: actions/checkout@v4
+        with:
+          path: ocsf-server
+
+      - name: Checkout ocsf-schema repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/ocsf-schema
+          path: ocsf-schema
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.push_to_ecr == 'yes')
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.push_to_ecr == 'yes')
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        run: |
+          # Get short SHA
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          # Get current date
+          BUILD_DATE=$(date +'%Y-%m-%d')
+
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+
+          # Construct tags
+          TAGS="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"
+          TAGS="${TAGS},${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:git-${SHORT_SHA}"
+          TAGS="${TAGS},${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${BUILD_DATE}"
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        working-directory: ocsf-server
+        run: |
+          docker build -t ocsf-server:test .
+          echo "✅ Docker image built successfully"
+
+      - name: Test Docker image
+        run: |
+          # Start container
+          docker run -d --name ocsf-server-test \
+            --volume $(pwd)/ocsf-schema:/app/schema \
+            -p 8080:8080 \
+            ocsf-server:test
+
+          # Wait for server to start
+          echo "Waiting for server to start..."
+          sleep 10
+
+          # Test HTTP endpoint
+          if curl -f http://localhost:8080 > /dev/null 2>&1; then
+            echo "✅ Server responded successfully"
+          else
+            echo "❌ Server failed to respond"
+            docker logs ocsf-server-test
+            exit 1
+          fi
+
+          # Cleanup
+          docker stop ocsf-server-test
+          docker rm ocsf-server-test
+
+      - name: Tag and push to ECR
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.push_to_ecr == 'yes')
+        working-directory: ocsf-server
+        run: |
+          # Split tags and push each one
+          IFS=',' read -ra TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+
+          for tag in "${TAG_ARRAY[@]}"; do
+            echo "Tagging and pushing: $tag"
+            docker tag ocsf-server:test "$tag"
+            docker push "$tag"
+          done
+
+          echo "✅ Successfully pushed all tags to ECR"
+
+      - name: Output image details
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.push_to_ecr == 'yes')
+        run: |
+          echo "🎉 Image pushed successfully!"
+          echo ""
+          echo "📦 Image tags:"
+          echo "  - latest"
+          echo "  - git-${{ steps.meta.outputs.short_sha }}"
+          echo "  - ${{ steps.meta.outputs.build_date }}"
+          echo ""
+          echo "🔗 Pull command:"
+          echo "  docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"
+          echo ""
+          echo "🚀 Run command:"
+          echo "  docker run -d \\"
+          echo "    --volume /path/to/ocsf-schema:/app/schema \\"
+          echo "    -p 8080:8080 -p 8443:8443 \\"
+          echo "    ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"

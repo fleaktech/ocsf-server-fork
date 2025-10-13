@@ -60,16 +60,12 @@ jobs:
         run: |
           # Get short SHA
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          # Get current date
-          BUILD_DATE=$(date +'%Y-%m-%d')
 
           echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
 
-          # Construct tags
+          # Construct tags (only latest and hash)
           TAGS="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"
-          TAGS="${TAGS},${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:git-${SHORT_SHA}"
-          TAGS="${TAGS},${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${BUILD_DATE}"
+          TAGS="${TAGS},${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${SHORT_SHA}"
 
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
@@ -126,8 +122,7 @@ jobs:
           echo ""
           echo "📦 Image tags:"
           echo "  - latest"
-          echo "  - git-${{ steps.meta.outputs.short_sha }}"
-          echo "  - ${{ steps.meta.outputs.build_date }}"
+          echo "  - ${{ steps.meta.outputs.short_sha }}"
           echo ""
           echo "🔗 Pull command:"
           echo "  docker pull ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"

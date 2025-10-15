@@ -36,7 +36,8 @@ jobs:
       - name: Checkout ocsf-schema repository
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/ocsf-schema-fork
+          repository: ocsf/ocsf-schema
+          ref: v1.6.0
           path: ocsf-schema
 
       - name: Set up Docker Buildx
